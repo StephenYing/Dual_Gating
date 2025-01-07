@@ -1,1 +1,0 @@
-# GRL_mini_project
