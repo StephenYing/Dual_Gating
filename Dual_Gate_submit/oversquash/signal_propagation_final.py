@@ -1,17 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-A single file combining:
-  1) ring_transfer.py (graph generators)
-  2) utils.py (helper utilities)
-  3) factory.py (g2/dual gating classes + build_model)
-  4) The main 'signal_propagation.py' script
-
-You can run:
-  python signal_propagation_all_in_one.py
-"""
-
 import os
 import sys
 import random
@@ -23,7 +9,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import networkx as nx
 
-# For PyTorch Geometric
 from torch_geometric.data import Data
 from torch_geometric.datasets import TUDataset
 from torch_geometric.utils import to_networkx
@@ -31,18 +16,9 @@ from torch_geometric.nn import GIN, GCN, GAT, GraphSAGE, GCNConv, GATConv
 
 from sklearn.preprocessing import LabelBinarizer, MinMaxScaler
 from typing import List
-# If you need 'functorch', ensure it's installed.
-# from functorch import vmap
 
-
-###############################################################################
-# (A) ring_transfer.py content
-###############################################################################
 
 def generate_ring_lookup_graph(nodes:int):
-    """
-    (Deprecated) Generate a dictionary lookup ring graph.
-    """
     if nodes <= 1: 
         raise ValueError("Minimum of two nodes required")
 
@@ -231,7 +207,7 @@ def generate_lollipop_transfer_graph_dataset(nodes:int, classes:int=5, samples:i
 
 
 ###############################################################################
-# (B) utils.py content
+# utils.py
 ###############################################################################
 
 eps_min = 1e-12
@@ -279,14 +255,10 @@ def get_resistances(graph, reference_node):
 
 
 ###############################################################################
-# (C) factory.py content: G2, Dual gating classes, plus build_model
+# G2, Dual gating classes, and build_model
 ###############################################################################
 
 class G2GCNModel(nn.Module):
-    """
-    Already defined above, repeated for clarity if needed...
-    (We keep them here to show the final single-file structure.)
-    """
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers, norm=None):
         super().__init__()
         self.num_layers = num_layers
@@ -320,9 +292,6 @@ class G2GCNModel(nn.Module):
 
 
 class G2GATModel(nn.Module):
-    """
-    Single-gate G2 with GAT aggregator (all in hidden_channels).
-    """
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers, norm=None):
         super().__init__()
         self.num_layers = num_layers
@@ -356,10 +325,6 @@ class G2GATModel(nn.Module):
 
 
 class DualGate_GCNModel(nn.Module):
-    """
-    Dual gating (A,B,C) with aggregator=GCN.
-    forward(x, edge_index, x0).
-    """
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers, norm=None):
         super().__init__()
         self.num_layers = num_layers
@@ -416,10 +381,6 @@ class DualGate_GCNModel(nn.Module):
 
 
 class DualGate_GATModel(nn.Module):
-    """
-    aggregator=GAT, dual gating => forward(x, edge_index, x0)
-    with an input_fc, skip_fc, etc.
-    """
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
         super().__init__()
         self.num_layers = num_layers
@@ -521,10 +482,6 @@ def build_model(args):
 
 
 def build_dataset(args):
-    """
-    Optionally build synthetic ring/tree/lollipop datasets, if desired.
-    Adjust or remove if you have your own real dataset.
-    """
     assert args.dataset in ['TREE','RING','LOLLIPOP'], f"Unknown dataset {args.dataset}"
 
     dataset_factory = {
@@ -544,13 +501,9 @@ def build_dataset(args):
 
 
 ###############################################################################
-# (D) The main signal_propagation script
+# The main signal_propagation
 ###############################################################################
 def initialize_architecture(arch, dataset_item, layers=10, dim_h=5):
-    """
-    Create a simple 'args' object for build_model(...).
-    We'll guess input_dim from dataset_item.x, then build the model.
-    """
     from types import SimpleNamespace
     args = SimpleNamespace()
 
@@ -560,7 +513,6 @@ def initialize_architecture(arch, dataset_item, layers=10, dim_h=5):
     args.hidden_dim = dim_h
     args.mpnn_layers = layers
     args.norm = "batch_norm"
-    # optional: you can remove the above assertion if you truly want 'norm=None'
 
     model = build_model(args)
     return model
@@ -572,12 +524,10 @@ def process_graph_data(dataset_item, arch, num_vertices_sampled=10):
 
     G = to_networkx(dataset_item, to_undirected=True)
 
-    # If the graph is disconnected, skip
     if not nx.is_connected(G):
         print("Skipping a disconnected graph.")
         return None  
 
-    # Floyd-Warshall for all pairs
     distances = nx.floyd_warshall_numpy(G)
 
     pairs_runaway = []
@@ -604,9 +554,6 @@ def process_graph_data(dataset_item, arch, num_vertices_sampled=10):
             acc += out[j] * distances[j, source]
         propagation = ((1/max_t_A_st) * acc).mean()
 
-        # Effective resistances
-        # If the graph is not fully connected or if reference_node is unreachable, 
-        # networkx.resistance_distance can fail.
         total_effective_resistance = sum(get_resistances(G, source).values())
         pairs_runaway.append((total_effective_resistance, propagation))
 
@@ -614,8 +561,6 @@ def process_graph_data(dataset_item, arch, num_vertices_sampled=10):
 
 
 def main():
-    # If you'd rather use a real dataset, pick TUDataset name:
-    # e.g. name='PROTEINS', 'NCI1', 'MUTAG', etc.
     DATASET_NAME = 'PROTEINS'
     dataset = TUDataset(root='.', name=DATASET_NAME)
 
@@ -624,13 +569,11 @@ def main():
 
     for i, data in enumerate(dataset):
         try:
-            # for each architecture
             for arch in ARCHS:
                 arch_runaway = process_graph_data(data, arch, num_vertices_sampled=10)
                 if not arch_runaway: 
-                    # e.g. disconnected => skip
                     continue
-                mean_runaway = np.array(arch_runaway).mean(axis=0).tolist()  # shape (2,)
+                mean_runaway = np.array(arch_runaway).mean(axis=0).tolist()  
                 pairs[arch].append(tuple(mean_runaway))
         except Exception as e:
             print(f"Error processing graph {i}: {str(e)}")
@@ -647,7 +590,7 @@ def main():
         sorted_data = data_array[data_array[:,0].argsort()]
         x = sorted_data[:,0]
         y = sorted_data[:,1]
-        from utils.utils import smooth_plot  # or define smooth_plot above
+        from utils.utils import smooth_plot
         smooth_plot(x, y, ax=ax, halflife=2)
         ax.set_title(title, fontsize=20)
         ax.set_ylim(0,1)

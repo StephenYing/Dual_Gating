@@ -1,6 +1,3 @@
-#################################################
-# 0) Imports
-#################################################
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,7 +6,6 @@ from torch_scatter import scatter
 import networkx as nx
 import matplotlib.pyplot as plt
 
-# For building PyG data from networkx
 try:
     from torch_geometric.utils import from_networkx
     from torch_geometric.nn import GCNConv, GATConv
@@ -17,41 +13,21 @@ except ImportError:
     raise ImportError("Please install torch_geometric and torch_scatter.")
 
 
-#################################################
-# 1) Build a 2D grid + Dirichlet energy function
-#################################################
 def build_2d_grid_graph(grid_size=10):
-    """
-    Creates a grid_size x grid_size 2D grid using NetworkX,
-    then converts to PyG data format with attributes:
-      data.x (initialized later),
-      data.edge_index
-    """
     G = nx.grid_2d_graph(grid_size, grid_size)
-    G = nx.convert_node_labels_to_integers(G)  # label nodes 0..N-1
+    G = nx.convert_node_labels_to_integers(G) 
     data = from_networkx(G)
     return data
 
 def dirichlet_energy(x, edge_index):
-    """
-    \mathcal{E}(X) = 0.5 * sum_{(i,j) in E} ||x_i - x_j||^2.
-    x: [N, d] node features
-    edge_index: [2, E]
-    """
     row, col = edge_index
     diff = x[row] - x[col]  # [E, d]
     diff_sq = (diff**2).sum(dim=-1)  # [E]
     return 0.5 * diff_sq.sum().item()
 
 
-#################################################
-# 2) The G^2 aggregator (official snippet)
-#################################################
 class G2(nn.Module):
-    """
-    Used to compute a per-node gating \tau_i by measuring
-    average neighbor differences (|X_i - X_j|^p).
-    """
+
     def __init__(self, conv, p=2., conv_type='GCN', activation=nn.ReLU()):
         super().__init__()
         self.conv = conv
@@ -61,34 +37,20 @@ class G2(nn.Module):
 
     def forward(self, X, edge_index):
         n_nodes = X.size(0)
-        # 1) aggregator pass (just to replicate the G^2 logic)
         if self.conv_type == 'GAT':
-            # multi-head GAT => shape [N, out_dim*heads]
-            # original snippet: we do elu(...) then .view(...,4).mean(dim=-1)
-            # We'll assume out_dim*heads is divisible by 4 in their code
             X_agg = F.elu(self.conv(X, edge_index)).view(n_nodes, -1, 4).mean(dim=-1)
-        else:  # 'GCN'
+        else:  
             X_agg = self.activation(self.conv(X, edge_index))
 
-        # 2) gating from neighbor differences
+
         row, col = edge_index
-        diff = (torch.abs(X[row] - X[col]) ** self.p).sum(dim=-1)  # sum or squeeze
+        diff = (torch.abs(X[row] - X[col]) ** self.p).sum(dim=-1)  
         gg = scatter(diff, row, dim=0, dim_size=n_nodes, reduce='mean')
-        gg = torch.tanh(gg)  # => in [-1,1], typically positive
+        gg = torch.tanh(gg)  
         return gg
 
 
-#################################################
-# 3) The G^2-GNN model (multi-layer)
-#################################################
 class G2_GNN(nn.Module):
-    """
-    Exactly as in your snippet (slightly adapted):
-      X_{agg} = aggregator(X)
-      tau_i = G2(X)
-      X = (1 - tau_i) * X + tau_i * X_agg
-    repeated for 'nlayers'.
-    """
     def __init__(self, nfeat, nhid, nclass, nlayers,
                  conv_type='GCN', p=2., drop_in=0., drop=0., use_gg_conv=True):
         super().__init__()
@@ -116,10 +78,6 @@ class G2_GNN(nn.Module):
             self.G2 = G2(self.conv, p, conv_type, activation=nn.ReLU())
 
     def forward(self, data, return_all=False):
-        """
-        If return_all=True, we also return a list of X after each layer
-        so we can compute Dirichlet energy.
-        """
         X = data.x
         edge_index = data.edge_index
         n_nodes = X.size(0)
@@ -137,7 +95,7 @@ class G2_GNN(nn.Module):
             else:
                 X_agg = torch.relu(self.conv(X, edge_index))
             # gating
-            tau = self.G2(X, edge_index).unsqueeze(-1)  # shape: [N, 1]
+            tau = self.G2(X, edge_index).unsqueeze(-1)  
 
             # update
             X = (1 - tau)*X + tau*X_agg
@@ -152,15 +110,7 @@ class G2_GNN(nn.Module):
             return out
 
 
-#################################################
-# 4) The plain GNN model (GCN / GAT)
-#################################################
 class plain_GNN(nn.Module):
-    """
-    A minimal multi-layer GCN or GAT with no gating.
-    For the Dirichlet experiment, we track the intermediate
-    X at each layer.
-    """
     def __init__(self, nfeat, nhid, nclass, nlayers, conv_type='GCN', drop_in=0., drop=0.):
         super().__init__()
         self.conv_type = conv_type
@@ -204,16 +154,7 @@ class plain_GNN(nn.Module):
             return X
 
 
-#################################################
-# 5) The Dual-Gating model (your eqn (3)-(4))
-#################################################
 class DualGating_GNN(nn.Module):
-    """
-    X^n = A * X^{n-1} + B * sigma(F_\theta(X^{n-1}, G)) + C * (W_skip X^(0))
-    with (A, B, C) = (...) / (1 + Gamma_smooth + Gamma_squash).
-    We'll reuse G^2 aggregator for Gamma_smooth, Gamma_squash
-    or set them to 0 if not using gating.
-    """
     def __init__(self, nfeat, nhid, nclass, nlayers,
                  conv_type='GCN', p=2.,
                  drop_in=0., drop=0., use_gg_conv=True):
@@ -226,7 +167,6 @@ class DualGating_GNN(nn.Module):
         self.enc = nn.Linear(nfeat, nhid)
         self.dec = nn.Linear(nhid, nclass)
 
-        # main aggregator
         if conv_type == 'GCN':
             self.conv = GCNConv(nhid, nhid)
             if use_gg_conv:
@@ -240,7 +180,6 @@ class DualGating_GNN(nn.Module):
         else:
             raise NotImplementedError("conv_type must be 'GCN' or 'GAT'")
 
-        # G2-based gating
         if use_gg_conv:
             self.G2_smooth = G2(self.conv_gg_smooth, p=p, conv_type=conv_type, activation=nn.ReLU())
             self.G2_squash = G2(self.conv_gg_squash, p=p, conv_type=conv_type, activation=nn.ReLU())
@@ -248,7 +187,6 @@ class DualGating_GNN(nn.Module):
             self.G2_smooth = None
             self.G2_squash = None
 
-        # skip transform
         self.W_skip = nn.Linear(nhid, nhid, bias=False)
 
     def forward(self, data, return_all=False):
@@ -256,10 +194,9 @@ class DualGating_GNN(nn.Module):
         edge_index = data.edge_index
         n_nodes = X0.size(0)
 
-        # encode
         X = F.dropout(X0, self.drop_in, training=self.training)
         X = torch.relu(self.enc(X))
-        X_init = X.clone()  # store X^(0) after encoding
+        X_init = X.clone()  
 
         all_states = [X.clone()]
 
@@ -301,58 +238,32 @@ class DualGating_GNN(nn.Module):
             return X
 
 
-#################################################
-# 6) Dirichlet experiment with 6 lines
-#################################################
-def run_dirichlet_experiment_six_lines(grid_size=10, nlayers=50):
-    """
-    1) Build a 2D grid
-    2) Initialize random features
-    3) Create 6 models:
-       - GCN
-       - GAT
-       - G^2-GCN
-       - G^2-GAT
-       - Dual-Gating-GCN
-       - Dual-Gating-GAT
-    4) Run each for 'nlayers' (the forward pass).
-       We'll store the node embeddings after each layer
-       and compute Dirichlet energy.
-    5) Plot all 6 lines in log scale with improved styling.
-    """
 
-    # 1) Build grid data
+def run_dirichlet_experiment_six_lines(grid_size=10, nlayers=50):
+
+    # Build grid data
     data = build_2d_grid_graph(grid_size)
     N = data.num_nodes
-    # We'll define a random input feature of dimension 'in_dim'
     in_dim = 4
     data.x = torch.rand(N, in_dim)  # random [0,1]
 
-    # 2) define # hidden / # classes for these toy models
     nhid = 4
     nclass = 2
 
-    # 3) Build the six models
-    # 3.1 plain GCN
+    # Build the six models
     model_gcn = plain_GNN(nfeat=in_dim, nhid=nhid, nclass=nclass,
                           nlayers=nlayers, conv_type='GCN')
-    # 3.2 plain GAT
     model_gat = plain_GNN(nfeat=in_dim, nhid=nhid, nclass=nclass,
                           nlayers=nlayers, conv_type='GAT')
-    # 3.3 G^2-GCN
     model_g2_gcn = G2_GNN(nfeat=in_dim, nhid=nhid, nclass=nclass,
                           nlayers=nlayers, conv_type='GCN', use_gg_conv=True)
-    # 3.4 G^2-GAT
     model_g2_gat = G2_GNN(nfeat=in_dim, nhid=nhid, nclass=nclass,
                           nlayers=nlayers, conv_type='GAT', use_gg_conv=True)
-    # 3.5 Dual-Gating-GCN
     model_dual_gcn = DualGating_GNN(nfeat=in_dim, nhid=nhid, nclass=nclass,
                                     nlayers=nlayers, conv_type='GCN', use_gg_conv=True)
-    # 3.6 Dual-Gating-GAT
     model_dual_gat = DualGating_GNN(nfeat=in_dim, nhid=nhid, nclass=nclass,
                                     nlayers=nlayers, conv_type='GAT', use_gg_conv=True)
 
-    # We'll evaluate them in eval mode (no dropout used in forward)
     models = [
         ("GCN",              model_gcn),
         ("GAT",              model_gat),
@@ -362,7 +273,7 @@ def run_dirichlet_experiment_six_lines(grid_size=10, nlayers=50):
         ("Dual-Gating-GAT", model_dual_gat),
     ]
 
-    # 4) For each model, do forward pass with return_all=True => store node embeddings
+
     results = {}
     for label, net in models:
         net.eval()
@@ -374,10 +285,8 @@ def run_dirichlet_experiment_six_lines(grid_size=10, nlayers=50):
             energies.append(e)
         results[label] = energies
 
-    # 5) Improved plotting style
     plt.figure(figsize=(8,6))
 
-    # Define distinct colors / markers / linestyles for each method
     plot_styles = {
         "GCN": {
             "color": "cornflowerblue",
@@ -417,7 +326,6 @@ def run_dirichlet_experiment_six_lines(grid_size=10, nlayers=50):
         },
     }
 
-    # Plot each line with these styles
     for label, energies in results.items():
         style = plot_styles[label]
         plt.plot(
@@ -441,8 +349,5 @@ def run_dirichlet_experiment_six_lines(grid_size=10, nlayers=50):
 
 
 
-#################################################
-# 7) Main
-#################################################
 if __name__ == "__main__":
     run_dirichlet_experiment_six_lines(grid_size=10, nlayers=50)

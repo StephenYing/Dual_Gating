@@ -1,6 +1,3 @@
-###############################################
-# acc_heterophily_experiment.py
-###############################################
 import os
 import sys
 import numpy as np
@@ -18,15 +15,7 @@ from torch_geometric.utils import to_undirected
 
 import argparse
 
-######################################################
-# 1) Data Handling
-######################################################
 def get_data(name, split=0):
-    """
-    Loads a heterophilic dataset (Cornell, Texas, Wisconsin, Chameleon,
-    Squirrel, Film) from local path, along with a particular 'split' (0..9).
-    Binds train/val/test masks to data.
-    """
     path = f'../data/{name}'
     if name in ['chameleon', 'squirrel']:
         dataset = WikipediaNetwork(root=path, name=name)
@@ -39,7 +28,6 @@ def get_data(name, split=0):
 
     data = dataset[0]
 
-    # For the geometry splits:
     if name in ['chameleon', 'squirrel']:
         splits_file = np.load(f'{path}/{name}/geom_gcn/raw/{name}_split_0.6_0.2_{split}.npz')
     elif name in ['cornell', 'texas', 'wisconsin']:
@@ -57,19 +45,11 @@ def get_data(name, split=0):
     data.val_mask   = torch.tensor(val_mask,   dtype=torch.bool)
     data.test_mask  = torch.tensor(test_mask,  dtype=torch.bool)
 
-    # Optionally make edges undirected:
     data.edge_index = to_undirected(data.edge_index)
     return data
 
 
-######################################################
-# 2) Model Definitions (Vanilla, G², Dual)
-######################################################
 class G2(nn.Module):
-    """
-    Single gating aggregator pass => local diffs => gating tau
-    (unchanged from your snippet).
-    """
     def __init__(self, conv, p=2., conv_type='SAGE', activation=nn.ReLU()):
         super().__init__()
         self.conv = conv
@@ -94,9 +74,6 @@ class G2(nn.Module):
 
 
 class G2_GNN(nn.Module):
-    """
-    G^2 aggregator on top of GCN/SAGE/GAT (unchanged).
-    """
     def __init__(self, nfeat, nhid, nclass, nlayers,
                  conv_type='SAGE', p=2., drop_in=0, drop=0, use_gg_conv=True):
         super().__init__()
@@ -149,10 +126,6 @@ class G2_GNN(nn.Module):
 
 
 class VanillaGNN(nn.Module):
-    """
-    No gating aggregator (GCN/SAGE/GAT) repeated nlayers, then dec.
-    (unchanged).
-    """
     def __init__(self, nfeat, nhid, nclass, nlayers, conv_type='SAGE',
                  drop_in=0., drop=0.):
         super().__init__()
@@ -192,15 +165,7 @@ class VanillaGNN(nn.Module):
         return self.dec(x)
 
 
-###########################################
-# DualGate with global-mean oversquash
-###########################################
 def compute_gamma_squash_global_mean(x, p=2.):
-    """
-    gamma_squash(i) = 1 - tanh( sum_d( |x[i,d] - global_mean[d]|^p ) ).
-    shape x: [N, d].
-    returns shape [N, 1].
-    """
     global_mean = x.mean(dim=0, keepdim=True)  # shape [1,d]
     diffs = (x - global_mean).abs().pow(p).sum(dim=1)   # shape [N]
     diffs_tanh = torch.tanh(diffs)
@@ -209,12 +174,6 @@ def compute_gamma_squash_global_mean(x, p=2.):
 
 
 class DualGate_GNN(nn.Module):
-    """
-    aggregator can be GCN/SAGE/GAT,
-    skip = x0 from raw dimension => hidden dimension,
-    oversmoothing => local diffs,
-    oversquash => global-mean approach.
-    """
     def __init__(self, nfeat, nhid, nclass, nlayers, 
                  conv_type='GCN', drop_in=0., drop=0., p=2.5):
         super().__init__()
@@ -246,7 +205,7 @@ class DualGate_GNN(nn.Module):
         # encode
         x = F.dropout(x0, self.drop_in, training=self.training)
         x = torch.relu(self.enc(x))
-        x_skip = self.skip_fc(x0)  # shape [N, nhid]
+        x_skip = self.skip_fc(x0)  
 
         for _ in range(self.nlayers):
             # aggregator
@@ -284,18 +243,8 @@ class DualGate_GNN(nn.Module):
         return gamma
 
 
-######################################################
-# 3) build_model_wrapper
-######################################################
 def build_model_wrapper(model_name, nfeat, nhid, nclass, nlayers,
                         drop_in=0., drop=0., use_g2_conv=True, p=2.):
-    """
-    model_name in {
-       "gcn","gat","graphsage",        
-       "g2-gcn","g2-gat","g2-graphsage",
-       "dual-gcn","dual-gat","dual-graphsage"
-    }
-    """
     m = model_name.lower()
     if 'graphsage' in m:
         conv_type = 'GraphSAGE'
@@ -324,7 +273,7 @@ def build_model_wrapper(model_name, nfeat, nhid, nclass, nlayers,
 
 
 ######################################################
-# 4) Training + Evaluate
+# Training + Evaluate
 ######################################################
 def run_experiment(args, split):
     """
@@ -401,7 +350,7 @@ def run_experiment(args, split):
 
 
 ######################################################
-# 5) Main
+# Main
 ######################################################
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Heterophily test (9 variants) with global-mean oversquash gating in Dual.')

@@ -5,10 +5,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Original PyG MPNN classes
+
 from torch_geometric.nn import GIN, GCN, GAT, GraphSAGE, GCNConv, GATConv
 
-# Data generation for synthetic tasks (if needed)
 from data.ring_transfer import (
     generate_tree_transfer_graph_dataset,
     generate_ring_transfer_graph_dataset,
@@ -16,9 +15,7 @@ from data.ring_transfer import (
 )
 
 
-########################################################
-# 0) Utility: Build 2-Hop Edges
-########################################################
+
 def build_two_hop_edges(edge_index, num_nodes):
     """
     Builds a 2-hop adjacency from the original 1-hop edge_index [2, E].
@@ -27,7 +24,6 @@ def build_two_hop_edges(edge_index, num_nodes):
     device = edge_index.device
     row, col = edge_index
 
-    # Adjacency list
     neighbors = [[] for _ in range(num_nodes)]
     for r, c in zip(row.tolist(), col.tolist()):
         neighbors[r].append(c)
@@ -38,7 +34,6 @@ def build_two_hop_edges(edge_index, num_nodes):
         n2_set = set()
         for n1 in neighbors[i]:
             n2_set.update(neighbors[n1])
-        # remove i if present => skip self-loop
         if i in n2_set:
             n2_set.remove(i)
         for n2 in n2_set:
@@ -52,7 +47,7 @@ def build_two_hop_edges(edge_index, num_nodes):
 
 
 ########################################################
-# 1) G2 Single-Gate Classes (GCN / GAT)
+# G2 Single-Gate Classes (GCN / GAT)
 ########################################################
 class G2GCNModel(nn.Module):
     """
@@ -91,10 +86,6 @@ class G2GCNModel(nn.Module):
 
 
 class G2GATModel(nn.Module):
-    """
-    Single-gate G2 but aggregator is GATConv.
-    Called as model(x, edge_index).
-    """
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers, norm=None):
         super().__init__()
         self.num_layers = num_layers
@@ -127,7 +118,7 @@ class G2GATModel(nn.Module):
 
 
 ########################################################
-# 2) Dual-Gate Classes (GCN / GAT) - 1-hop only
+# Dual-Gate Classes (GCN / GAT) - 1-hop only
 ########################################################
 class DualGate_GCNModel(nn.Module):
     """
@@ -183,11 +174,6 @@ class DualGate_GCNModel(nn.Module):
 
 
 class DualGate_GATModel(nn.Module):
-    """
-    Called as model(x, edge_index, x0).
-    aggregator is GATConv(1-hop).
-    Oversmoothing & oversquash from 1-hop diffs.
-    """
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
         super().__init__()
         self.num_layers = num_layers
@@ -237,15 +223,9 @@ class DualGate_GATModel(nn.Module):
 
 
 ########################################################
-# 3) Dual-Hop Classes (GCN / GAT) => 2-hop for oversquash
+# Dual-Hop Classes (GCN / GAT) => 2-hop for oversquash
 ########################################################
 class DualHopGCNModel(nn.Module):
-    """
-    Called as model(x, edge_index, x0).
-    aggregator => GCN(1-hop),
-    oversmoothing => 1-hop diffs,
-    oversquash => 2-hop diffs.
-    """
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers, norm=None):
         super().__init__()
         self.num_layers = num_layers
@@ -269,12 +249,9 @@ class DualHopGCNModel(nn.Module):
         edge_index_2hop = build_two_hop_edges(edge_index, num_nodes).to(device)
 
         for conv in self.convs:
-            # aggregator => GCN(1-hop)
             x_agg = F.relu(conv(x, edge_index))
 
-            # oversmoothing => 1-hop
             Gamma_smooth = self.compute_gamma_smooth(x_agg, edge_index)
-            # oversquash => 2-hop
             Gamma_squash = self.compute_gamma_squash(x_agg, edge_index_2hop)
 
             A, B, C = self.compute_abc(x, x_agg, x0, Gamma_smooth, Gamma_squash)
@@ -317,12 +294,6 @@ class DualHopGCNModel(nn.Module):
 
 
 class DualHopGATModel(nn.Module):
-    """
-    Called as model(x, edge_index, x0).
-    aggregator => GAT(1-hop),
-    oversmoothing => 1-hop diffs,
-    oversquash => 2-hop diffs.
-    """
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
         super().__init__()
         self.num_layers = num_layers
@@ -343,7 +314,6 @@ class DualHopGATModel(nn.Module):
         x  = self.input_fc(x)
         x0 = self.input_fc(x0)
 
-        # build 2-hop adjacency for oversquash gating
         edge_index_2hop = build_two_hop_edges(edge_index, num_nodes).to(device)
 
         for conv in self.convs:
@@ -391,17 +361,9 @@ class DualHopGATModel(nn.Module):
 
 
 ########################################################
-# 4) build_model & build_dataset
+# build_model & dataset
 ########################################################
 def build_model(args):
-    """
-    Notice we add 'dual-hop-gcn' and 'dual-hop-gat' 
-    to gating_map so you can do:
-      args.model = 'dual-hop-gcn'
-      or
-      args.model = 'dual-hop-gat'
-    Then you call model(x, edge_index, x0)
-    """
     assert args.model in [
         'gin','gcn','gat','sage',
         'g2-gcn','g2-gat',
@@ -452,10 +414,6 @@ def build_model(args):
 
 
 def build_dataset(args):
-    """
-    Synthetic ring/tree/lollipop dataset if needed,
-    or skip if you have real data.
-    """
     assert args.dataset in ['TREE','RING','LOLLIPOP'], f"Unknown dataset {args.dataset}"
 
     dataset_factory = {

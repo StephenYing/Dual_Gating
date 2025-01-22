@@ -32,28 +32,24 @@ class G2GCNModel(nn.Module):
         self.num_layers = num_layers
         self.hidden_channels = hidden_channels
 
-        # 1) Input projection: from in_channels -> hidden_channels
         self.input_fc = nn.Linear(in_channels, hidden_channels, bias=False)
 
-        # 2) Define GCN layers: each from hidden_channels -> hidden_channels
         self.convs = nn.ModuleList([
             GCNConv(hidden_channels, hidden_channels, normalize=norm)
             for _ in range(num_layers)
         ])
 
-        # 3) Final linear
         self.fc = nn.Linear(hidden_channels, out_channels, bias=True)
 
     def forward(self, x, edge_index):
-        # 1) Project x from [N, in_channels] to [N, hidden_channels]
-        x = self.input_fc(x)  # shape: [N, hidden_channels]
+        x = self.input_fc(x)  
 
         for conv in self.convs:
             x_new = F.relu(conv(x, edge_index))
             tau = self.compute_g2_tau(x, x_new, edge_index)
             x = (1 - tau) * x + tau * x_new
 
-        out = self.fc(x)  # [N, out_channels]
+        out = self.fc(x) 
         return out
 
     def compute_g2_tau(self, old_x, new_x, edge_index, p=2):
@@ -69,7 +65,7 @@ class G2GCNModel(nn.Module):
 
         deg = torch.bincount(row).float() + 1e-10
         tau_vals = tau_vals / deg
-        tau_vals = torch.tanh(tau_vals).unsqueeze(-1)  # shape [N,1]
+        tau_vals = torch.tanh(tau_vals).unsqueeze(-1) 
         return tau_vals
 
 
@@ -83,10 +79,8 @@ class G2GATModel(nn.Module):
         self.num_layers = num_layers
         self.hidden_channels = hidden_channels
 
-        # 1) Input projection
         self.input_fc = nn.Linear(in_channels, hidden_channels, bias=False)
 
-        # 2) GAT layers
         self.convs = nn.ModuleList([
             GATConv(hidden_channels, hidden_channels, heads=1)
             for _ in range(num_layers)
@@ -95,7 +89,7 @@ class G2GATModel(nn.Module):
         self.fc = nn.Linear(hidden_channels, out_channels, bias=True)
 
     def forward(self, x, edge_index):
-        x = self.input_fc(x)  # [N, hidden_channels]
+        x = self.input_fc(x)  
 
         for conv in self.convs:
             x_new = F.relu(conv(x, edge_index))
@@ -120,26 +114,17 @@ class G2GATModel(nn.Module):
 
 
 ###############################################################################
-# 2) Dual-Gate Classes (GCN / GAT) with skip transform & input projections
+# Dual-Gate Classes (GCN / GAT) with skip transform & input projections
 ###############################################################################
 class DualGate_GCNModel(nn.Module):
-    """
-    Dual gating with aggregator = GCNConv.
-    forward(x, edge_index, x0), but we also do an input_fc so x, x0 all become [N, hidden_channels].
-    Here, we compute both Gamma_smooth and Gamma_squash from local differences,
-    removing the random oversquash approach.
-    """
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers, norm=None):
         super().__init__()
         self.num_layers = num_layers
         self.hidden_channels = hidden_channels
 
-        # 1) We project from in_channels->hidden_channels for aggregator,
-        #    plus a skip_fc from hidden_channels->hidden_channels if needed.
         self.input_fc = nn.Linear(in_channels, hidden_channels, bias=False)
         self.skip_fc  = nn.Linear(hidden_channels, hidden_channels, bias=False)
 
-        # 2) GCN layers (all from hidden_channels->hidden_channels)
         self.convs = nn.ModuleList([
             GCNConv(hidden_channels, hidden_channels, normalize=norm)
             for _ in range(num_layers)
@@ -148,22 +133,15 @@ class DualGate_GCNModel(nn.Module):
         self.fc = nn.Linear(hidden_channels, out_channels, bias=True)
 
     def forward(self, x, edge_index, x0):
-        """
-        x: shape [N, in_channels]
-        x0: shape [N, in_channels] for skip
-        """
-        # Project both x & x0 to hidden_dims
+
         x  = self.input_fc(x)    # [N, hidden_channels]
-        x0 = self.input_fc(x0)   # also [N, hidden_channels]
+        x0 = self.input_fc(x0)   # [N, hidden_channels]
 
         for conv in self.convs:
             x_agg = F.relu(conv(x, edge_index))
 
-            # 1) Gamma_smooth from local differences
             Gamma_smooth = self.compute_gamma_local_diff(x_agg, edge_index)
 
-            # 2) Gamma_squash also from local differences in x_agg, 
-            #    so oversquash gating is data-driven (not random).
             Gamma_squash = self.compute_gamma_local_diff(x_agg, edge_index)
 
             A, B, C = self.compute_abc(x, x_agg, x0, Gamma_smooth, Gamma_squash)
@@ -175,9 +153,6 @@ class DualGate_GCNModel(nn.Module):
         return out
 
     def compute_gamma_local_diff(self, x_agg, edge_index, p=2):
-        """
-        Node-wise gating from neighbor differences in x_agg (just like G2).
-        """
         row, col = edge_index
         diffs = (x_agg[row] - x_agg[col]).abs().pow(p).sum(dim=-1)
 
@@ -221,17 +196,14 @@ class DualGate_GATModel(nn.Module):
         self.fc = nn.Linear(hidden_channels, out_channels, bias=True)
 
     def forward(self, x, edge_index, x0):
-        # Project x, x0 to hidden_dims
         x  = self.input_fc(x)
         x0 = self.input_fc(x0)
 
         for conv in self.convs:
             x_agg = F.relu(conv(x, edge_index))
 
-            # 1) Gamma_smooth from neighbor diffs
             Gamma_smooth = self.compute_gamma_local_diff(x_agg, edge_index)
 
-            # 2) oversquash gating also from local diffs
             Gamma_squash = self.compute_gamma_local_diff(x_agg, edge_index)
 
             A, B, C = self.compute_abc(x, x_agg, x0, Gamma_smooth, Gamma_squash)
@@ -264,25 +236,9 @@ class DualGate_GATModel(nn.Module):
 
 
 #######################################
-# 3) build_model & build_dataset
+#build_model & dataset
 #######################################
 def build_model(args):
-    """
-    Builds either a standard GIN/GCN/GAT/SAGE from PyG, or
-    a gating model (G2 / Dual) from above, depending on args.model.
-
-    Expect:
-      args.model in [
-         'gin','gcn','gat','sage',
-         'g2-gcn','g2-gat',
-         'dual-gcn','dual-gat'
-      ]
-      args.input_dim (e.g., 37),
-      args.hidden_dim (e.g., 5),
-      args.output_dim,
-      args.mpnn_layers,
-      args.norm (string)
-    """
     assert args.model in [
         'gin','gcn','gat','sage',
         'g2-gcn','g2-gat',
@@ -309,7 +265,6 @@ def build_model(args):
     }
 
     if args.model in models_map:
-        # standard PyG model
         ModelClass = models_map[args.model]
         return ModelClass(
             in_channels=args.input_dim,
@@ -319,7 +274,6 @@ def build_model(args):
             norm=args.norm
         )
     else:
-        # gating approach
         GatingClass = gating_map[args.model]
         return GatingClass(
             in_channels=args.input_dim,
@@ -330,10 +284,6 @@ def build_model(args):
 
 
 def build_dataset(args):
-    """
-    Builds a synthetic dataset using ring, tree, or lollipop graphs
-    if desired. Adjust or remove if you have your own real dataset.
-    """
     assert args.dataset in ['TREE','RING','LOLLIPOP'], f"Unknown dataset {args.dataset}"
 
     dataset_factory = {

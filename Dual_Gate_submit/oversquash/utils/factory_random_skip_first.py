@@ -5,22 +5,19 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Original PyG MPNN classes
 from torch_geometric.nn import GIN, GCN, GAT, GraphSAGE
 
-# Data generation for synthetic tasks (if needed)
 from data.ring_transfer import (
     generate_tree_transfer_graph_dataset,
     generate_ring_transfer_graph_dataset,
     generate_lollipop_transfer_graph_dataset
 )
 
-# For G2 and Dual gating classes:
 from torch_geometric.nn import GCNConv, GATConv
 
 
 ###############################################################################
-# 1) G2 Single-Gate Classes (GCN / GAT) with input projections
+# G2 Single-Gate Classes (GCN / GAT) with input projections
 ###############################################################################
 class G2GCNModel(nn.Module):
     """
@@ -32,20 +29,17 @@ class G2GCNModel(nn.Module):
         self.num_layers = num_layers
         self.hidden_channels = hidden_channels
 
-        # 1) Input projection
         self.input_fc = nn.Linear(in_channels, hidden_channels, bias=False)
 
-        # 2) GCN aggregator layers
         self.convs = nn.ModuleList([
             GCNConv(hidden_channels, hidden_channels, normalize=norm)
             for _ in range(num_layers)
         ])
 
-        # 3) Final linear
         self.fc = nn.Linear(hidden_channels, out_channels, bias=True)
 
     def forward(self, x, edge_index):
-        x = self.input_fc(x)  # shape [N, hidden_channels]
+        x = self.input_fc(x)  
 
         for conv in self.convs:
             x_new = F.relu(conv(x, edge_index))
@@ -70,10 +64,6 @@ class G2GCNModel(nn.Module):
 
 
 class G2GATModel(nn.Module):
-    """
-    Single-gate G2 but aggregator is GATConv.
-    Also unchanged.
-    """
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers, norm=None):
         super().__init__()
         self.num_layers = num_layers
@@ -111,15 +101,9 @@ class G2GATModel(nn.Module):
 
 
 ###############################################################################
-# 2) Dual-Gate Classes (GCN / GAT) with skip transform & input projections
-#    with gating disabled on the first layer
+# Dual-Gate Classes (GCN / GAT) with skip transform & input projections with gating disabled on the first layer
 ###############################################################################
 class DualGate_GCNModel(nn.Module):
-    """
-    Dual gating with aggregator = GCNConv, but on the first layer,
-    gating is DISABLED => acts like plain GCN aggregator => can start near 1.
-    Then from layer 1 onward, we re-enable gating logic.
-    """
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers, norm=None):
         super().__init__()
         self.num_layers = num_layers
@@ -142,12 +126,9 @@ class DualGate_GCNModel(nn.Module):
             x_agg = F.relu(conv(x, edge_index))
 
             if layer_idx == 0:
-                # no gating => plain aggregator
                 x = x_agg
             else:
-                # normal dual gating
                 Gamma_smooth = self.compute_gamma_smooth(x_agg, edge_index)
-                # example random oversquash gamma
                 Gamma_squash = 0.5 + 0.4 * torch.rand(x.size(0), device=x.device)
                 Gamma_squash = Gamma_squash.unsqueeze(1).expand_as(x)
 
@@ -206,7 +187,6 @@ class DualGate_GATModel(nn.Module):
             x_agg = F.elu(conv(x, edge_index))
 
             if layer_idx == 0:
-                # no gating => normal aggregator
                 x = x_agg
             else:
                 Gamma_smooth = self.compute_gamma_smooth(x_agg, edge_index)
@@ -243,13 +223,9 @@ class DualGate_GATModel(nn.Module):
 
 
 #######################################
-# 3) build_model & build_dataset
+# build_model & dataset
 #######################################
 def build_model(args):
-    """
-    The rest is the same as your code, 
-    but now the Dual classes skip gating on layer=0 => can start near 1.
-    """
     assert args.model in [
         'gin','gcn','gat','sage',
         'g2-gcn','g2-gat',
@@ -276,7 +252,6 @@ def build_model(args):
     }
 
     if args.model in models_map:
-        # standard PyG model
         ModelClass = models_map[args.model]
         return ModelClass(
             in_channels=args.input_dim,
@@ -286,7 +261,6 @@ def build_model(args):
             norm=args.norm
         )
     else:
-        # gating approach
         GatingClass = gating_map[args.model]
         return GatingClass(
             in_channels=args.input_dim,
@@ -297,10 +271,6 @@ def build_model(args):
 
 
 def build_dataset(args):
-    """
-    Synthetic dataset if needed. 
-    If you have real data, skip or remove this.
-    """
     assert args.dataset in ['TREE','RING','LOLLIPOP'], f"Unknown dataset {args.dataset}"
 
     dataset_factory = {

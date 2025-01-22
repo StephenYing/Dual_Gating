@@ -1,6 +1,3 @@
-###############################################
-# acc_heterophily_all_in_csv.py
-###############################################
 import os
 import sys
 import numpy as np
@@ -18,7 +15,7 @@ from torch_geometric.utils import to_undirected
 import argparse
 
 ######################################################
-# 1) Data Handling
+# Data Handling
 ######################################################
 def get_data(name, split=0):
     """
@@ -61,10 +58,6 @@ def get_data(name, split=0):
     return data
 
 
-######################################################
-# 2) Minimal Model Definitions (Vanilla, G^2, Dual)
-######################################################
-# For brevity, we'll define simpler versions here or you can import from your existing script.
 
 class VanillaGNN(nn.Module):
     def __init__(self, nfeat, nhid, nclass, nlayers, conv_type='GCN',
@@ -163,7 +156,6 @@ class G2_GNN(nn.Module):
             else:
                 x_agg=F.relu(self.conv(x, edge_index))
             tau=self.G2(x, edge_index)
-            # shape [N], expand to [N,1] if needed
             tau = tau.unsqueeze(-1)
             x = (1 - tau)*x + tau*x_agg
 
@@ -238,15 +230,12 @@ class DualGate_GNN(nn.Module):
         # gamma_squash(i)=1 - tanh(||x_i - mean||^p)
         global_mean = x.mean(dim=0, keepdim=True)
         d = (x - global_mean).abs().pow(p).sum(dim=-1)
-        # shape [N]
         d_tanh=torch.tanh(d)
         gamma_squash=1. - d_tanh
         return gamma_squash.unsqueeze(-1)
 
 
-######################################################
-# 3) build_model_wrapper
-######################################################
+
 def build_model_wrapper(model_name, nfeat, nhid, nclass, nlayers,
                         drop_in=0., drop=0., use_g2_conv=True, p=2.):
     m = model_name.lower()
@@ -279,9 +268,6 @@ def build_model_wrapper(model_name, nfeat, nhid, nclass, nlayers,
     return net
 
 
-######################################################
-# 4) Single training function
-######################################################
 def run_experiment(args, dataset_name, model_name, split):
     data=get_data(dataset_name, split).to(args.device)
     nclass=int(data.y.max().item()+1)
@@ -347,9 +333,8 @@ def run_experiment(args, dataset_name, model_name, split):
     return best_test_acc
 
 
-######################################################
-# 5) Main => run all combos & save CSV
-######################################################
+# Main
+
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--nhid', type=int, default=256)
@@ -390,11 +375,9 @@ if __name__=='__main__':
             std_val=arr.std()
             print(f"=> Final {ds}, {md} => {mean_val:.4f} ± {std_val:.4f}")
 
-            # store in a row => dataset,model,"0.8118 ± 0.0576"
             row=[ds, md, f"{mean_val:.4f} ± {std_val:.4f}"]
             results.append(row)
 
-    # write CSV
     import csv
     with open(args.output_csv, 'w', newline='') as f:
         writer=csv.writer(f)
